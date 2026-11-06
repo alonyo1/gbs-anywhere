@@ -477,6 +477,9 @@ private.
 the release tarball and Debian package in `dist/`. [CONTRIBUTING.md](CONTRIBUTING.md)
 covers the checks, the conventions and adding an integration.
 
+[HANDOFF.md](HANDOFF.md) records the Bluetooth/Linea Mini session's implementation,
+validation, remaining hardware checks, and cleanup/recovery work.
+
 ## License
 
 Copyright 2026 Skamba and the gbs-anywhere contributors.
