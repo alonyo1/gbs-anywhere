@@ -3,13 +3,19 @@
 Recorded 7 November 2026 for the work performed on 6–7 November. This document
 captures the implementation, operating decisions, validation and recovery work
 from the session. It is suitable for sharing with the source. The separate
-private handoff retains the original host inventory, logs and backups.
+private handoff originally retained the host inventory, logs and backups.
 
-**The implementation is committed and running in Docker, but no physical BOOKOO
-scale and Linea Mini shot has been tested.** Hardware compatibility and automatic
+**Final retention decision:** the user requested full local cleanup, including
+all recovery backups, with only the remote repository retained. The runtime has
+been uninstalled. Local source, publishing credentials and the private backup
+bundle are removed after the final documentation push. Deployment and recovery
+details below describe the historical setup, not resources to expect on the host.
+
+**The implementation is committed, but no physical BOOKOO scale and Linea Mini
+shot has been tested.** Hardware compatibility and automatic
 cutoff accuracy remain unverified. The next step is supervised hardware validation.
 
-## Repository and deployment state
+## Repository and deployment state before cleanup
 
 - Upstream baseline: `d35cd3a680537a83dd62fe8e9ab7b6abaaadd915`, release v0.4.0.
 - Implementation commit: `b59316e7e04d6033a4cae847e660a8f7b83a8cd4`.
@@ -297,7 +303,7 @@ Before relying on automatic cutoff, validate on the actual machine and scale:
 Neither protocol tests nor successful Linux advertising proves those physical
 behaviors. The implementation remains experimental until they are demonstrated.
 
-## Cleanup, backups and recovery
+## Cleanup, backups and recovery prepared during the session
 
 The private companion bundle is stored outside the checkout in a sibling
 `gbs-anywhere-handoff` directory on the session host. It contains its own
@@ -352,3 +358,29 @@ When retiring the bridge, remove any subsequently created `LUNAR-C` registration
 through the La Marzocco app. Linux file cleanup cannot undo machine-side pairing
 or calibration. Forget only a verified intended Bluetooth device, and preserve
 the host's shared BlueZ device database and Docker services.
+
+## Final full cleanup
+
+The user subsequently selected full uninstall and explicitly requested removal
+of recovery backups as well. The remote source repository is the sole project
+artifact to retain. This supersedes the earlier recommendations to keep local
+backups and rollback containers.
+
+The app and all recorded rollback containers/images, named data volume, launcher,
+unused build cache, session research/test files, Rust toolchains/Cargo cache,
+pip cache and the 68 newly installed browser/test packages were removed. The
+original Bluetooth configuration was restored, and the session-created locked
+container account, Docker build metadata and Bluetooth scan history were removed.
+Shared Docker and Bluetooth services and unrelated host files remain in place.
+
+Final local removal after this documentation push covers the checkout, private
+handoff and all recovery archives, GitHub CLI login and package, its generated
+Git credential-helper configuration, remaining session package configuration,
+and downloaded APT archives. GitHub Actions remains disabled in the remote
+repository. No release or application image was published there.
+
+To resume elsewhere, clone this repository, install the documented build/runtime
+requirements, build the image, and configure the grinder/scale/Mini again.
+GitHub contains the source and this handoff, not a runtime-data or image backup.
+The historical local cleanup script and inventory are not retained in GitHub;
+do not expect their paths or the archived Docker images to be available.
