@@ -61,9 +61,14 @@
 
 mod kind;
 mod manager;
+mod scale_live;
 
+pub(crate) mod bluetooth_scale;
+pub(crate) mod bookoo_bluetooth;
+pub(crate) mod bookoo_brew_by_weight;
 pub(crate) mod half_decent;
 pub(crate) mod la_marzocco;
+pub(crate) mod scale_shot;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -81,9 +86,15 @@ pub(crate) use kind::{Field, Input};
 pub use kind::{Kind, Settings};
 pub(crate) use manager::ChangeError;
 pub use manager::Integrations;
+pub(crate) use scale_live::{ScaleLive, ScalePhase};
 
 /// Every integration, in the order the app lists them.
-pub static KINDS: &[&Kind] = &[&la_marzocco::KIND, &half_decent::KIND];
+pub static KINDS: &[&Kind] = &[
+    &la_marzocco::KIND,
+    &half_decent::KIND,
+    &bookoo_bluetooth::KIND,
+    &bookoo_brew_by_weight::KIND,
+];
 
 /// The command-line flags of every integration.
 #[derive(Debug, Clone, clap::Args)]
@@ -92,6 +103,10 @@ pub struct CliArgs {
     la_marzocco: la_marzocco::config::Args,
     #[command(flatten)]
     half_decent: half_decent::config::Args,
+    #[command(flatten)]
+    bookoo_bluetooth: bookoo_bluetooth::config::Args,
+    #[command(flatten)]
+    bookoo_brew_by_weight: bookoo_brew_by_weight::config::Args,
 }
 
 impl CliArgs {
@@ -100,6 +115,11 @@ impl CliArgs {
         [
             (&la_marzocco::KIND, self.la_marzocco.settings()),
             (&half_decent::KIND, self.half_decent.settings()),
+            (&bookoo_bluetooth::KIND, self.bookoo_bluetooth.settings()),
+            (
+                &bookoo_brew_by_weight::KIND,
+                self.bookoo_brew_by_weight.settings(),
+            ),
         ]
         .into_iter()
         .filter_map(|(kind, settings)| Some((kind, settings?)))
@@ -128,14 +148,20 @@ pub(crate) struct Link {
     pub(crate) status: Status,
 }
 
-/// One brew the grinder asked for (a knob press, or an E65/E80
-/// Grind-by-Sync grind), named by the moment it started. An integration
+/// One brew (a grinder request or a selected scale test), named by the
+/// moment it started. An integration
 /// measures and reports against it, so a shot is only ever reported for the
 /// brew it was measured in, never for the next one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Brew {
     /// `Phase::Running.since`, which is also the `at` of its `ShotStarted`.
     started: Instant,
+}
+
+impl Brew {
+    pub(crate) fn started_at(self) -> Instant {
+        self.started
+    }
 }
 
 /// What happened to a reported shot.
@@ -165,6 +191,36 @@ fn waiting_brew(m: &mut Machine, now: Instant) -> Option<Brew> {
 }
 
 impl Link {
+    /// A test remains bound to the exact manual brew that requested it.
+    pub(crate) fn test_waits_for(&self, brew: Brew) -> bool {
+        self.server.with(|m, now| {
+            matches!(m.phase(now),
+            Phase::Running { since, requested_by_grinder: false } if since == brew.started)
+        })
+    }
+
+    /// Completes a selected scale's test. It cannot answer a grinder brew
+    /// or increase the integration's grinder report count.
+    pub(crate) fn finish_test(&self, brew: Brew, time: Duration, grams: f64) -> ReportOutcome {
+        self.server.with(|m, now| {
+            if !matches!(m.phase(now), Phase::Running { since, requested_by_grinder: false }
+                if since == brew.started)
+            {
+                return ReportOutcome::NotWaiting;
+            }
+            if !grams.is_finite() || grams <= 0.0 {
+                return ReportOutcome::NotWaiting;
+            }
+            match m.report_shot_by(now, ShotResult::new(time, grams), Some(self.status.id())) {
+                Ok(()) => ReportOutcome::Reported {
+                    grams,
+                    source: "scale test".into(),
+                },
+                Err(e) => ReportOutcome::Refused(e),
+            }
+        })
+    }
+
     /// The brew the grinder asked for and is waiting on, if any.
     pub(crate) fn waiting_brew(&self) -> Option<Brew> {
         self.server.with(waiting_brew)
@@ -410,6 +466,9 @@ pub(crate) struct StatusSnapshot {
     pub(crate) health_age_ms: u64,
     pub(crate) reports: u32,
     pub(crate) last_report: Option<ShotResult>,
+    pub(crate) live: Option<ScaleLive>,
+    #[serde(skip)]
+    pub(crate) test_brew: Option<Brew>,
 }
 
 #[derive(Debug)]
@@ -423,6 +482,7 @@ struct StatusInner {
     since: Instant,
     reports: u32,
     last_report: Option<ShotResult>,
+    live: Option<scale_live::LiveState>,
 }
 
 /// Shared, cheap to clone. Integrations set it; the server reads it.
@@ -432,6 +492,7 @@ pub(crate) struct Status {
     kind: Arc<str>,
     title: Arc<str>,
     inner: Arc<Mutex<StatusInner>>,
+    tests: tokio::sync::watch::Sender<Option<Brew>>,
 }
 
 impl Status {
@@ -449,8 +510,59 @@ impl Status {
                 since: Instant::now(),
                 reports: 0,
                 last_report: None,
+                live: None,
             })),
+            tests: tokio::sync::watch::channel(None).0,
         }
+    }
+
+    pub(crate) fn scale_live(
+        &self,
+        weight_g: f64,
+        time_ms: Option<u64>,
+        phase: ScalePhase,
+        brew: Option<Brew>,
+        test: bool,
+        paddle_timing: bool,
+    ) {
+        self.lock().live = Some(scale_live::LiveState::new(
+            weight_g,
+            time_ms,
+            phase,
+            brew,
+            test,
+            paddle_timing,
+        ));
+    }
+
+    pub(crate) fn scale_bridge_live(
+        &self,
+        grams: f64,
+        time_ms: Option<u64>,
+        phase: ScalePhase,
+        brew: Option<Brew>,
+        test: bool,
+    ) {
+        self.lock().live = Some(
+            scale_live::LiveState::new(grams, time_ms, phase, brew, test, true)
+                .mini_scale_commands(),
+        );
+    }
+
+    pub(crate) fn scale_tests(&self) -> tokio::sync::watch::Receiver<Option<Brew>> {
+        self.tests.subscribe()
+    }
+
+    pub(crate) fn can_test_scale(&self) -> bool {
+        let s = self.snapshot();
+        self.tests.receiver_count() > 0
+            && s.health == Health::Connected
+            && s.live
+                .is_some_and(|l| l.age_ms <= 1000 && l.phase == ScalePhase::Idle)
+    }
+
+    pub(crate) fn request_scale_test(&self, started: Instant) {
+        self.tests.send_replace(Some(Brew { started }));
     }
 
     pub(crate) fn id(&self) -> &str {
@@ -490,6 +602,7 @@ impl Status {
             s.since = Instant::now();
         }
         s.health = Health::Failing;
+        s.live = None;
         s.detail = Detail::from(message.as_str());
         s.detail_since = Instant::now();
         s.last_error = Some(message);
@@ -505,6 +618,9 @@ impl Status {
             s.since = Instant::now();
         }
         s.health = health;
+        if matches!(health, Health::Starting | Health::Stopped | Health::Failing) {
+            s.live = None;
+        }
         s.detail = detail;
         s.detail_since = Instant::now();
         if health != Health::Failing {
@@ -541,6 +657,8 @@ impl Status {
             health_age_ms: u64::try_from(s.since.elapsed().as_millis()).unwrap_or(u64::MAX),
             reports: s.reports,
             last_report: s.last_report,
+            live: s.live.as_ref().map(scale_live::LiveState::snapshot),
+            test_brew: *self.tests.borrow(),
         }
     }
 
@@ -608,9 +726,31 @@ impl Backoff {
     }
 }
 
+/// Read the local Mini Bluetooth token in pairing mode, without cloud access.
+/// The command-line caller prints it only on explicit request.
+pub async fn read_mini_token(address: &str, adapter: &str) -> anyhow::Result<String> {
+    bluetooth_scale::read_mini_token(address, adapter).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn scale_readings_expire_and_are_cleared_on_disconnect() {
+        let status = Status::new("scale", "scale", "Scale");
+        let _tests = status.scale_tests();
+        status.connected("ready");
+        status.scale_live(100.0, None, ScalePhase::Idle, None, false, false);
+        assert!(status.can_test_scale());
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        assert!(!status.can_test_scale());
+        assert!(status.snapshot().live.unwrap().age_ms >= 1000);
+        status.error("disconnected");
+        assert!(status.snapshot().live.is_none());
+        status.connected("reconnected");
+        assert!(!status.can_test_scale(), "reconnecting needs a new reading");
+    }
     use crate::protocol::{GrindResult, MachineConfig};
 
     fn link() -> Link {

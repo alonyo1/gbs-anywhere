@@ -364,7 +364,7 @@
     // The running brew (brewOf; undefined until the Start tab first
     // rendered), whether step 2 shows the fields for it, and whether no
     // integration reported it in time.
-    brew: undefined, typeIn: false, missed: false,
+    brew: undefined, typeIn: false, missed: false, scaleManual: false,
   };
 
   const wifiOf = () => (S && S.grinder && S.grinder.wifi) || null;
@@ -567,7 +567,11 @@
       sc = "error"; reason = last.reason; cause = causeOf(last);
     }
     if (sc === "error" && outcome && outcome.seq <= ui.dismissed) sc = "ready";
-    return { sc, reason, cause, outcome, started: lastOf(["shot_started"]), job: lastOf(["grinder_grind_finished"]) };
+    const started = lastOf(["shot_started"]);
+    const manual = !["ready", "knob"].includes(sc) && (phase === "running" ? S.shot.requested_by_grinder === false
+      : !!(started && started.requested_by_grinder === false && outcome && outcome.seq > started.seq));
+    if (manual && sc === "checking") sc = "done";
+    return { sc, manual, reason, cause, outcome, started, job: lastOf(["grinder_grind_finished"]) };
   }
 
   // Per state: the tone and badge (its catalog key, or "" for none) of each step.
@@ -906,12 +910,14 @@
     // Step 1 says when no shot can start: blocked while there is no grinder
     // (or no gbs-anywhere, or the grinder won't grind), waiting while it
     // connects or pairs.
-    const stop = stopOf(sys, f);
+    const standalone = f.manual && ["running", "checking", "done", "error", "aborted"].includes(f.sc);
+    const stop = standalone ? null : stopOf(sys, f);
     let plan = PLANS[f.sc];
     // Also after a shot, whose result stays in steps 2 and 3.
     if (stop && sys.def.step1 === "wait") plan = [["wait", "badge.waiting"], ...plan.slice(1)];
     else if (stop && ["ready", "done", "error", "aborted"].includes(f.sc)) plan = [[sys.tone === "warn" ? "warn" : "error", "badge.blocked"], ...plan.slice(1)];
     else if (f.sc === "ready" && sys.def.step1 === "wait") plan = [["wait", "badge.waiting"], ["none", ""], ["none", ""]];
+    if (standalone) plan = [["skip", "badge.skipped"], plan[1], ["skip", "badge.skipped"]];
     return { f, sys, stop, plan, brew: brewOf(f), r: reporters(), tg: targets() };
   }
 
@@ -927,13 +933,16 @@
     const was = ui.brew;
     const same = p.brew === was || (p.brew !== null && was != null && was.endsWith(":?") && p.brew.split(":")[0] === was.split(":")[0]);
     ui.brew = p.brew;
-    if (!same) ui.typeIn = ui.missed = false;
+    if (!same) ui.typeIn = ui.missed = ui.scaleManual = false;
     // Step 2 shows the fields to type the shot in when no integration can
     // report it: none is working, the brew was started without the grinder,
     // or none reported it in time. Once shown, they stay for this brew.
     if (p.brew !== null) {
       ui.missed = ui.missed || shotMissed(r);
-      ui.typeIn = ui.typeIn || r.manual || !S.shot.requested_by_grinder || ui.missed;
+      const testLive = S.shot.test_integration_id && currentScale();
+      if (testLive && !ui.scaleManual && !ui.missed) ui.typeIn = false;
+      else ui.typeIn = ui.typeIn || r.manual || (!S.shot.requested_by_grinder && !S.shot.test_integration_id) || ui.missed;
+      if (S.shot.test_integration_id && !testLive && elapsedMs() > 2000) ui.typeIn = true;
     }
     // Which step is open: the running or failed one opens by itself when the
     // shot moves on, step 3 with the result once done; otherwise step 1, or
@@ -1013,6 +1022,7 @@
         win > 0 ? t("start.step2.info.limit", { window: windowLabel() }) : "",
       ].filter(Boolean).join(" ");
       $("s2-flush").hidden = !!S.shot.requested_by_grinder;
+      $("s2-flush").textContent = t(S.shot.test_integration_id ? "scale.test.note" : "start.step2.flush");
       // Whichever comes first wins: the shot typed in or an integration's.
       const note = r.manual && r.list.length ? cap(t("start.step2.failed", { n: r.list.length, names: theTitles(r.list) }))
         : ui.missed ? t("start.step2.missed", { n: r.live.length, names: theTitles(r.live) }) : "";
@@ -1051,13 +1061,13 @@
     if (f.sc === "aborted") $("s2-aborted").textContent = t(causeInfo(f.cause).text);
 
     // Step 3
-    $("s3-wait").hidden = !(f.sc === "ready" || f.sc === "knob" || f.sc === "running");
-    $("s3-outcome").hidden = !shown;
-    if (shown && res) {
+    $("s3-wait").hidden = f.manual || !(f.sc === "ready" || f.sc === "knob" || f.sc === "running");
+    $("s3-outcome").hidden = !shown || f.manual;
+    if (shown && res && !f.manual) {
       $("s3-shot").textContent = shot;
       rating = renderOutcome(res, tg, f.outcome && f.outcome.kind === "shot_reported" ? f.outcome : null);
     }
-    $("s3-skip").hidden = !(f.sc === "error" || f.sc === "aborted");
+    $("s3-skip").hidden = !(f.manual || f.sc === "error" || f.sc === "aborted");
 
     // What each step came to, under its title (hidden while open): the
     // recipe, the shot (not everyone has a scale) and the grinder's rating.
@@ -1151,16 +1161,52 @@
     if (!S || S.shot.phase !== "running") return 0;
     return (S.shot.phase_age_ms || 0) + (performance.now() - stateAt);
   }
+
+  const bluetoothKind = (kind) => ["bookoo_bluetooth", "bookoo_brew_by_weight"].includes(kind);
+  function freshScale(i) {
+    return online && i && i.live && !badHealth(i)
+      && i.live.age_ms + Math.max(0, performance.now() - stateAt) < 2000;
+  }
+  function currentScale() {
+    if (!S || S.shot.phase !== "running") return null;
+    return (S.integrations || []).find((i) => freshScale(i) && i.live.for_current_shot
+      && ["waiting", "flowing", "paddle", "brewing", "draining"].includes(i.live.phase)) || null;
+  }
+  function scaleTime(live) {
+    if (live.time_ms == null) return null;
+    return live.time_ms + (["flowing", "brewing"].includes(live.phase)
+      ? live.age_ms + Math.max(0, performance.now() - stateAt) : 0);
+  }
+
+  const paddleTime = (live) => live && ["paddle", "mini_scale"].includes(live.timing);
+  const bridgeTime = (live) => live && live.timing === "mini_scale";
   function renderClock() {
     if (!S || S.shot.phase !== "running" || tab !== "start") return;
     // A shot counts as missed while the clock runs: show the fields then.
     if (!$("s2-run").hidden && !ui.missed && shotMissed(reporters())) { renderStart(); return; }
     const ms = elapsedMs();
-    $("s2-timer").textContent = clock(ms, Math.floor);
+    const scale = currentScale(), live = scale && scale.live;
+    const time = live && scaleTime(live);
+    $("s2-timer").textContent = clock(time == null ? ms : time, Math.floor);
+    $("s2-timer").setAttribute("aria-label", live ? t(bridgeTime(live) ? "scale.bridgeTime" : paddleTime(live) ? "scale.paddleTime" : "scale.time") : tv("start.step2.timer"));
+    $("s2-live-time").textContent = time == null ? "– s" : t("unit.seconds", { time: secs(time / 1000) });
+    $("s2-live-weight").textContent = live ? t("unit.grams", { weight: grams(live.weight_g) }) : "– g";
+    $("s2-live-time").classList.toggle("pending", !live);
+    $("s2-live-weight").classList.toggle("pending", !live);
+    $("s2-live-caption").textContent = t(live ? (bridgeTime(live) ? ({ paddle: "scale.bridgeWaiting", brewing: "scale.bridgeTime", draining: "scale.bridgeDraining" }[live.phase] || "scale.bridgeTime") : ({ paddle: "scale.paddleWaiting", brewing: "scale.paddleTime", draining: "scale.draining", waiting: "scale.waiting" }[live.phase] || "scale.time")) : "start.step2.tile.after");
+    $("s2-weight-caption").textContent = live ? t("scale.from", { title: scale.title }) : t("start.step2.tile.after");
+    $("scale-manual").hidden = !live;
+    if (live) $("s2-info").textContent = t(bridgeTime(live) ? "scale.bridgeHelp" : paddleTime(live) ? "scale.paddleHelp" : "scale.timingHelp");
     const win = windowS() * 1000;
     $("s2-left").hidden = !(win > 0);
     if (win > 0) $("s2-left").textContent = t("start.step2.left", { time: clock(win - ms, Math.ceil) });
   }
+
+  $("scale-manual").addEventListener("click", () => {
+    ui.scaleManual = ui.typeIn = true;
+    renderStart();
+    $("f-time").focus();
+  });
 
   $("s2-info-btn").addEventListener("click", () => { ui.info = !ui.info; renderStart(); });
   $("s2-err-info-btn").addEventListener("click", () => { ui.errInfo = !ui.errInfo; renderStart(); });
@@ -1444,6 +1490,18 @@
       const text = integLine(i);
       setText(line, text);
       line.hidden = !text;
+      const card = box.children[n], live = card.querySelector(".scale-reading");
+      if (live) {
+        const fresh = freshScale(i);
+        setText(live, fresh ? t("unit.grams", { weight: grams(i.live.weight_g) })
+          + (i.live.time_ms == null ? "" : " · " + (i.live.phase === "idle"
+            ? t("scale.lastTime", { time: secs(i.live.time_ms / 1000) })
+            : t("unit.seconds", { time: secs(scaleTime(i.live) / 1000) }))) : t("scale.unavailable"));
+        const testing = S.shot.phase === "running" && S.shot.test_integration_id === i.id;
+        card.querySelector(".scale-test").disabled = !fresh || i.health !== "connected" || S.shot.phase === "running" || scaleTestPending;
+        card.querySelector(".scale-test-abort").hidden = !testing;
+        setText(card.querySelector(".scale-test-note"), bridgeTime(i.live) ? t(testing ? "scale.test.bridgeRunning" : "scale.test.bridgeHelp") : testing ? t(paddleTime(i.live) ? "scale.test.paddleRunning" : "scale.test.running") : t(paddleTime(i.live) ? "scale.test.paddleHelp" : "scale.test.help"));
+      }
     });
   }
 
@@ -1478,8 +1536,37 @@
     const item = el("div", { class: "integ" }, head,
       el("p", { class: "integ-detail" + (bad ? " bad" : ""), hidden: true }),
       foot.length ? el("p", { class: "foot", text: foot.join(" · ") }) : null);
+    if (bluetoothKind(i.kind)) {
+      item.append(el("p", { class: "scale-reading" }),
+        el("p", { class: "help scale-test-note" }),
+        el("div", { class: "row wrap" },
+          tEl("button", { type: "button", class: "btn-plain sm scale-test", onclick: () => startScaleTest(i.id) }, "scale.test.start"),
+          tEl("button", { type: "button", class: "btn-abort scale-test-abort", hidden: true, onclick: () => abortScaleTest(i.id) }, "scale.test.abort")));
+    }
     if (menuFor === key) item.append(menuList(key, t("integ.menu", { title: i.title }), actions));
     return item;
+  }
+
+  let scaleTestPending = false;
+  async function startScaleTest(id) {
+    if (scaleTestPending) return;
+    scaleTestPending = true; renderIntegrations();
+    try {
+      await api("/api/integrations/" + encodeURIComponent(id) + "/test", { method: "POST" });
+      await tick();
+    } catch (err) { scaleTestError(err); }
+    finally { scaleTestPending = false; renderIntegrations(); }
+  }
+  async function abortScaleTest(id) {
+    if (!S || S.shot.test_integration_id !== id) return;
+    try {
+      await api("/api/integrations/" + encodeURIComponent(id) + "/test", { method: "DELETE" });
+      await tick();
+    } catch (err) { scaleTestError(err); }
+  }
+  function scaleTestError(err) {
+    openSheet({ title: t("scale.test.title"), body: [el("p", { class: "body-text", text: errorText(err) })],
+      actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
   }
 
   /** An integration's status line in the current language: the catalog's
@@ -1613,11 +1700,56 @@
   }
   function formValues(box) {
     const settings = {};
-    for (const input of box.querySelectorAll("input")) {
+    for (const input of box.querySelectorAll("input[name]")) {
       const v = input.type === "password" ? input.value : input.value.trim();
       if (v) settings[input.name] = v;
     }
     return settings;
+  }
+
+  /** Discovery fills the address only after an explicit selection. Device
+   * names are untrusted text; they never become HTML or a connection request. */
+  function addScaleScanner(fields, kind, target = "address") {
+    if (!bluetoothKind(kind)) return;
+    const note = el("p", { class: "help", role: "status", text: t(target === "mini_address" ? "scale.scan.miniHelp" : "scale.scan.help") });
+    const results = el("ul", { class: "kinds scale-devices" });
+    const filter = el("input", { type: "search", placeholder: t("scale.scan.filter"),
+      "aria-label": t("scale.scan.filter"), hidden: true });
+    const button = tEl("button", { type: "button", class: "btn-plain sm" }, target === "mini_address" ? "scale.scan.mini" : "scale.scan.start");
+    const panel = el("div", { class: "stack-8 scale-scanner" }, button, note, filter, results);
+    if (target === "mini_address") fields.querySelector('input[name="mini_address"]').closest(".form-field").prepend(panel);
+    else {
+      fields.prepend(panel);
+      addScaleScanner(fields, kind, "mini_address");
+    }
+    let devices = [];
+    function draw() {
+      const query = filter.value.trim().toLowerCase();
+      results.replaceChildren(...devices.filter((d) => ((d.name || "") + " " + d.address).toLowerCase().includes(query))
+        .map((d) => el("li", null, el("button", { type: "button", onclick: () => {
+          fields.querySelector('input[name="' + target + '"]').value = d.address;
+          results.replaceChildren(); filter.hidden = true;
+          setText(note, t("scale.scan.selected", { name: d.name || d.address }));
+        } }, el("span", { class: "minw" },
+          el("span", { class: "kind-title", text: d.name || t("scale.scan.unnamed") }),
+          el("span", { class: "kind-sum", text: d.address + (d.rssi_dbm == null ? "" : " · " + d.rssi_dbm + " dBm") }))))));
+    }
+    filter.addEventListener("input", draw);
+    button.addEventListener("click", async () => {
+      const adapterInput = fields.querySelector('input[name="adapter"]');
+      const adapter = adapterInput.value.trim() || "hci0";
+      button.disabled = true; results.replaceChildren(); filter.hidden = true;
+      setText(note, t("scale.scan.running"));
+      try {
+        const found = await api("/api/bluetooth/scan", { method: "POST", body: JSON.stringify({ adapter }) });
+        if (!panel.isConnected) return;
+        if ((adapterInput.value.trim() || "hci0") !== adapter) { setText(note, t("scale.scan.changed")); return; }
+        devices = found.devices || []; filter.value = ""; filter.hidden = devices.length === 0;
+        setText(note, t(devices.length ? (target === "mini_address" ? "scale.scan.miniResults" : "scale.scan.results") : "scale.scan.empty"));
+        draw();
+      } catch (err) { if (panel.isConnected) setText(note, errorText(err)); }
+      finally { button.disabled = false; }
+    });
   }
 
   async function startEdit(i) {
@@ -1631,6 +1763,7 @@
     const values = saved.settings || {};
     const secrets = new Set(saved.secrets_set || []);
     const fields = el("div", { class: "stack-12" }, k.fields.map((f) => formField(k.id, f, "ef-", f.input === "password" ? null : values[f.key], secrets.has(f.key))));
+    addScaleScanner(fields, k.id);
     const error = el("p", { class: "hint warn", role: "alert", hidden: true });
     const save = tEl("button", { type: "submit", class: "btn-send" }, "common.save");
     const form = el("form", { class: "integ stack-12", autocomplete: "off", "aria-label": t("integ.edit.label", { title: i.title }) },
@@ -1648,7 +1781,7 @@
     });
     editing = i.id; editForm = form;
     invalidateIntegrations();
-    const first = form.querySelector("input");
+    const first = form.querySelector("input[name]");
     if (first) first.focus();
   }
   function stopEdit() { const id = editing; editing = null; editForm = null; invalidateIntegrations(); if (id) focusKebab("integ:" + id); }
@@ -1683,7 +1816,8 @@
     $("add-error").hidden = true;
     $("add-note").hidden = kindsPersistent;
     $("add-fields").replaceChildren(...k.fields.map((f) => formField(k.id, f, "af-", null, false)));
-    const first = $("add-fields").querySelector("input");
+    addScaleScanner($("add-fields"), k.id);
+    const first = $("add-fields").querySelector("input[name]");
     if (first) first.focus();
   }
   $("add-integration").addEventListener("click", () => openAdd($("add-panel").hidden));
@@ -3881,10 +4015,15 @@
   setInterval(() => {
     if (document.hidden) return;
     // Every second while the setup is open: it follows the pairing.
-    const every = sseOpen && tab !== "setup" ? 3000 : 1000;
+    const scales = S && ["start", "status"].includes(tab) && (S.integrations || []).some((i) => i.live && !badHealth(i));
+    const every = scales ? (S.shot.phase === "running" ? 250 : 500) : sseOpen && tab !== "setup" ? 3000 : 1000;
     if (performance.now() - lastPoll >= every - 50) { lastPoll = performance.now(); tick(); }
   }, 250);
-  setInterval(() => { renderClock(); renderSetupTimer(); }, 250);
+  setInterval(() => {
+    renderClock(); renderSetupTimer();
+    // Expire readings even while a state request is stuck on the network.
+    if (S && tab === "status") renderIntegrations();
+  }, 250);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 
   setLanguage();

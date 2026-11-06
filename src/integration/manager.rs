@@ -132,6 +132,13 @@ impl Integrations {
         self.lock().iter().map(|e| view(e, persistent)).collect()
     }
 
+    pub(crate) fn status(&self, id: &str) -> Option<Status> {
+        self.lock()
+            .iter()
+            .find(|e| e.id() == id)
+            .map(|e| e.status.clone())
+    }
+
     /// Whether integrations added in the app survive a restart.
     pub(crate) fn persistent(&self) -> bool {
         self.file.get().is_some()

@@ -13,12 +13,11 @@
 //! keeps working.
 //!
 //! * [`config`]: the setup form, the `--hds-*` flags, [`config::Config`].
-//! * [`shot`]: finds the shot in the readings.
+//! * `scale_shot`: finds the shot in the readings.
 //! * [`run`]: the task.
 
 pub(crate) mod config;
 pub(crate) mod run;
-pub(crate) mod shot;
 
 use crate::integration::{Integration, Kind, Settings};
 

@@ -1,0 +1,8 @@
+The virtual scale protocol in src/integration/bookoo_brew_by_weight/wire.rs
+is adapted to Rust from kaspizzo/lamarzocco, licensed under Apache-2.0:
+https://github.com/kaspizzo/lamarzocco
+Revision 204dde0ce813a5768e993148d484e8a531def743
+Original files: scale_protocol.c, scale_adapter_core.c and scale_bookoo.c.
+Changes: Rust state machine, Linux BlueZ transport, bounded control confirmation,
+selected-peer checks and Grind-by-Sync reporting.
+The original license is included alongside this notice.

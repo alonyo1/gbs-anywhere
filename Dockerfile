@@ -43,6 +43,7 @@ RUN cargo build --release --locked \
 FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=build /usr/local/bin/gbs-anywhere /usr/local/bin/gbs-anywhere
 COPY LICENSE /usr/share/doc/gbs-anywhere/LICENSE
+COPY third-party/ /usr/share/doc/gbs-anywhere/third-party/
 # The licenses of the Rust crates built in.
 COPY --from=build /out/doc/ /usr/share/doc/gbs-anywhere/
 LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
@@ -51,6 +52,9 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
 # container is recreated.
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV CONFIG_FILE=/data/gbs-anywhere.json
+# Distroless does not alias /var/run to /run. Bluetooth uses the host's
+# system bus when /run/dbus is mounted read-only into the container.
+ENV DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 VOLUME ["/data"]
 # Docker lets unprivileged processes bind low ports inside a container's own
 # network namespace, so port 80 works as nonroot with `-p 80:80`.

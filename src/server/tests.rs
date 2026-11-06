@@ -13,6 +13,9 @@ use crate::protocol::{
 };
 use crate::test_support::temp_dir;
 
+#[path = "bluetooth_tests.rs"]
+mod bluetooth;
+
 /// Serves both routers on one port, like the binary with the app on the
 /// grinder port.
 async fn start() -> String {

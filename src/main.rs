@@ -155,6 +155,15 @@ struct Args {
     )]
     update_check: Option<bool>,
 
+    /// Read and print the Mini's secret Bluetooth token, then exit. Requires
+    /// physical pairing mode. No account login, web server or settings writes.
+    #[arg(long, value_name = "ADDRESS")]
+    read_mini_token: Option<String>,
+
+    /// Linux adapter for --read-mini-token.
+    #[arg(long, default_value = "hci0", requires = "read_mini_token")]
+    mini_token_adapter: String,
+
     #[command(flatten)]
     integrations: integration::CliArgs,
 }
@@ -162,6 +171,13 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if let Some(address) = &args.read_mini_token {
+        println!(
+            "{}",
+            integration::read_mini_token(address, &args.mini_token_adapter).await?
+        );
+        return Ok(());
+    }
     init_tracing();
     // First, so a `docker stop` during startup is not dropped.
     let shutdown = server::shutdown_signal();

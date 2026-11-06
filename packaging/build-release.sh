@@ -46,6 +46,7 @@ name="gbs-anywhere-$version-linux-$arch"
 rm -rf "target/$name"
 mkdir "target/$name"
 cp target/release/gbs-anywhere LICENSE README.md target/THIRD-PARTY-NOTICES "target/$name/"
+cp -R third-party "target/$name/"
 tar -czf "dist/$name.tar.gz" -C target "$name"
 
 # The package installs (no systemd here, so the service isn't started) and

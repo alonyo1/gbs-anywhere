@@ -28,6 +28,10 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.26.1", features = ["v4"] }
 
+# Linux Bluetooth through BlueZ over D-Bus; pure Rust, no libdbus dependency.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 
@@ -52,6 +56,8 @@ shot's time and weight, typed on a phone or reported by an integration, \
 let the grinder adjust its grind setting. Runs as the gbs-anywhere service \
 on port 80. Not affiliated with Mahlkönig or Hemro."""
 assets = [
+    ["third-party/scale-bridge/LICENSE", "usr/share/doc/gbs-anywhere/third-party/scale-bridge/", "644"],
+    ["third-party/scale-bridge/NOTICE", "usr/share/doc/gbs-anywhere/third-party/scale-bridge/", "644"],
     ["target/release/gbs-anywhere", "usr/bin/", "755"],
     ["packaging/deb/default", "etc/default/gbs-anywhere", "600"],
     ["README.md", "usr/share/doc/gbs-anywhere/", "644"],

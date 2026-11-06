@@ -1,6 +1,6 @@
 //! Finds the shot in the scale's readings: from the first drops to the flow
-//! stopping, and the weight in the cup. No I/O: readings carry the scale's
-//! own clock, so network delays don't change the time.
+//! stopping, and the weight in the cup. No I/O: readings carry a monotonic clock. Transports use the scale's
+//! uptime when available, or the host's arrival time for Bluetooth.
 //!
 //! Every reading goes through a median of three first, which removes the
 //! single-reading spikes the scale shows (up to ±0.45 g on an empty scale).
@@ -144,6 +144,16 @@ enum State {
 }
 
 impl Detector {
+    /// Elapsed flow time at the latest filtered reading, for the live display.
+    pub(crate) fn time_ms(&self) -> Option<u64> {
+        match self.state {
+            State::Flowing { start_ms, .. } => {
+                self.history.back().map(|r| r.ms.saturating_sub(start_ms))
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn new() -> Self {
         Self::default()
     }

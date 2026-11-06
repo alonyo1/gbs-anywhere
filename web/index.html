@@ -115,9 +115,10 @@
           <p class="hint warn" id="s2-missed" role="status" hidden></p>
           <div class="stack-8" id="s2-auto">
             <div class="tiles">
-              <div class="tile"><p class="tile-label" data-i18n="start.step2.tile.time">Shot time</p><p class="tile-value pending">– s</p><p class="tile-sub" data-i18n="start.step2.tile.after">after the shot</p><p class="tile-sub" id="s2-t-target"></p></div>
-              <div class="tile"><p class="tile-label" data-i18n="start.step2.tile.weight">Weight</p><p class="tile-value pending">– g</p><p class="tile-sub" data-i18n="start.step2.tile.after">after the shot</p><p class="tile-sub" id="s2-w-target"></p></div>
+              <div class="tile"><p class="tile-label" data-i18n="start.step2.tile.time">Shot time</p><p class="tile-value pending" id="s2-live-time">– s</p><p class="tile-sub" id="s2-live-caption" data-i18n="start.step2.tile.after">after the shot</p><p class="tile-sub" id="s2-t-target"></p></div>
+              <div class="tile"><p class="tile-label" data-i18n="start.step2.tile.weight">Weight</p><p class="tile-value pending" id="s2-live-weight">– g</p><p class="tile-sub" id="s2-weight-caption" data-i18n="start.step2.tile.after">after the shot</p><p class="tile-sub" id="s2-w-target"></p></div>
             </div>
+            <button type="button" class="btn-plain sm" id="scale-manual" data-i18n="scale.manual" hidden>Enter this shot manually</button>
             <div class="row"><button type="button" class="btn-abort" data-abort><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span data-i18n="start.step2.abort">Abort shot</span></button></div>
           </div>
           <form class="stack" id="shot-form" autocomplete="off" hidden>

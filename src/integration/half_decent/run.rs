@@ -14,7 +14,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use super::TITLE;
 use super::config::Config;
-use super::shot::{Detector, Progress, Reading, Shot};
+use crate::integration::scale_shot::{Detector, Progress, Reading, Shot};
 use crate::integration::{
     Backoff, BoxFuture, Brew, Detail, GrinderBrews, Integration, Link, tenths,
 };
@@ -347,7 +347,7 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
-    use crate::integration::half_decent::shot::synth::{espresso, readings};
+    use crate::integration::scale_shot::synth::{espresso, readings};
     use crate::integration::{Health, Status};
     use crate::protocol::MachineConfig;
     use crate::server::Server;

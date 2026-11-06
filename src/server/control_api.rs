@@ -34,10 +34,16 @@
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` (or `time_ms`) — ends the shot with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the shot as a user abort (grinder skips it) |
 //! | POST | `/api/shot/start` | starts a shot without a grinder request (an E64 WS sees a flush; an E65/E80 nothing) |
+//! | POST | `/api/integrations/<id>/test` | starts a test with one ready Bluetooth scale; never adjusts the grinder |
+//! | DELETE | `/api/integrations/<id>/test` | aborts only that scale's current test; cannot abort a grinder-requested shot |
+//! | POST | `/api/bluetooth/scan` | `{"adapter":"hci0"}` discovers devices for 8 s, without connecting; refused during a shot or another scan |
 //! | POST | `/api/machine` | patch the `ON`-state mako fields, e.g. `{"TANK_LEVEL":0}` |
 //! | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` — the pairing ID an E65/E80 grinder shows, only while the link asks for it (see [below](#post-apigrinderpairing)) |
 //! | POST | `/api/grinder/accepted` | the person confirms they accepted gbs-anywhere on the grinder; empty body (see [below](#post-apigrinderaccepted)) |
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |
+//!
+//! Scale `live.timing` is `first_drops` or `paddle`; paddle phases are
+//! `paddle` (armed), `brewing` (timer running), and `draining` (time frozen).
 //!
 //! The routes with more to say follow, one line per group or field, so a
 //! change to one touches only its line. The numbers in them are checked
@@ -58,6 +64,7 @@
 //!   * its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`;
 //!   * its status line `detail` in English, also as `detail_key` and `detail_vars` for wording it in another language (an `age_ms` among them is as of this reply), and `last_error` (while `failing`, in English);
 //!   * `reports` (the shots it reported since the start) and `last_report` (the last one's `time_ms` and `weight_g`, or `null`);
+//!   * `live`, for a connected Bluetooth scale: `weight_g`, `time_ms`, `phase` (`idle`, `waiting`, `flowing`, `done`), `test`, `age_ms`, and `for_current_shot`; stale readings must not be presented as current. `shot.test_integration_id` identifies a selected scale's running test, otherwise `null`.
 //!   * its `source` (`app`, or `command_line` for one from the start settings), `adoptable` (from the command line, and there is a settings file to move it into, see `/adopt`) and `from_command_line` (moved into the app from there, so deleting it brings the flags' one back at the next start).
 //! * `settings`: each setting, with
 //!   * its `source`, and the `start` value it goes back to;
@@ -183,6 +190,7 @@ pub(crate) fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::R
         .route("/api/shot/result", post(shot_result))
         .route("/api/shot/abort", post(shot_abort))
         .route("/api/shot/start", post(shot_start))
+        .route("/api/bluetooth/scan", post(bluetooth_scan))
         .route("/api/integrations", post(add_integration))
         .route("/api/integrations/kinds", get(integration_kinds))
         .route(
@@ -191,6 +199,10 @@ pub(crate) fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::R
         )
         .route("/api/integrations/{id}/settings", get(integration_settings))
         .route("/api/integrations/{id}/adopt", post(adopt_integration))
+        .route(
+            "/api/integrations/{id}/test",
+            post(scale_test).delete(abort_scale_test),
+        )
         .route("/api/machine", post(patch_machine))
         .route("/api/grinder/pairing", post(grinder_pairing))
         .route("/api/grinder/accepted", post(grinder_accepted))
@@ -202,7 +214,7 @@ pub(crate) fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::R
 /// The full state as JSON; also what the CLI prints.
 pub fn state_json(x: &Server) -> Value {
     let link = x.grinder_link();
-    let integrations = x.integrations().list();
+    let mut integrations = x.integrations().list();
     let settings = x.settings_json();
     let update = x.update_json();
     x.with(|m, now| {
@@ -211,9 +223,21 @@ pub fn state_json(x: &Server) -> Value {
             .grind_blocked()
             .map(|b| json!({ "cause": b, "grinder_message": b.grinder_message() }));
         let phase = m.phase(now);
+        let running_since = match phase { Phase::Running { since, .. } => Some(since), _ => None };
+        for i in &mut integrations {
+            if let Some(live) = &mut i.status.live {
+                live.for_current_shot = running_since.is_some()
+                    && live.brew.map(|b| b.started_at()) == running_since;
+            }
+        }
         let mut shot = serde_json::to_value(phase).unwrap_or(Value::Null);
         if let Value::Object(o) = &mut shot {
             o.insert("last".into(), json!(m.last_shot()));
+            let test_id = if matches!(phase, Phase::Running { requested_by_grinder: false, .. }) {
+                integrations.iter().find(|i| i.status.test_brew.map(|b| b.started_at()) == running_since)
+                    .map(|i| i.status.id.as_str())
+            } else { None };
+            o.insert("test_integration_id".into(), json!(test_id));
             // How long the shot has run, for a timer that does not depend
             // on the phone's clock.
             if let Phase::Running { since, .. } = phase {
@@ -632,6 +656,96 @@ async fn integration_settings(
     match x.integrations().form(&id) {
         Ok(form) => Json(form).into_response(),
         Err(e) => change_error(&e),
+    }
+}
+
+async fn scale_test(State(x): State<Arc<Server>>, Segment(id): Segment<String>) -> Response {
+    let Some(status) = x.integrations().status(&id) else {
+        return change_error(&ChangeError::NotFound);
+    };
+    if !status.can_test_scale() {
+        return error(
+            StatusCode::CONFLICT,
+            "scale_not_ready",
+            "wait for a fresh reading from the scale before starting a test",
+        );
+    }
+    let result = x.with(|m, now| {
+        m.start_shot(now)?;
+        status.request_scale_test(now);
+        Ok(())
+    });
+    machine_reply(result, &x)
+}
+
+async fn abort_scale_test(State(x): State<Arc<Server>>, Segment(id): Segment<String>) -> Response {
+    let Some(status) = x.integrations().status(&id) else {
+        return change_error(&ChangeError::NotFound);
+    };
+    let requested = status.snapshot().test_brew;
+    let result = x.with(|m, now| {
+        if !matches!(m.phase(now), Phase::Running { since, requested_by_grinder: false }
+            if requested.is_some_and(|b| b.started_at() == since))
+        {
+            return Err(crate::protocol::MachineError::NotRunning);
+        }
+        m.abort(now)
+    });
+    machine_reply(result, &x)
+}
+
+#[derive(Deserialize)]
+struct BluetoothScan {
+    #[serde(default = "default_adapter")]
+    adapter: String,
+}
+
+fn default_adapter() -> String {
+    "hci0".into()
+}
+
+/// One bounded discovery at a time. Dropping its future releases our BlueZ
+/// discovery session when a shot starts or the request is cancelled.
+async fn bluetooth_scan(
+    State(x): State<Arc<Server>>,
+    Body(input): Body<BluetoothScan>,
+) -> Response {
+    static SCANNING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    let adapter = match integration::bluetooth_scale::config::adapter_name(&input.adapter) {
+        Ok(a) => a,
+        Err(e) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "bluetooth_adapter_invalid",
+                &e.to_string(),
+            );
+        }
+    };
+    let Ok(_permit) = SCANNING.try_acquire() else {
+        return error(
+            StatusCode::CONFLICT,
+            "bluetooth_scan_busy",
+            "another Bluetooth scan is running",
+        );
+    };
+    let scan = integration::bluetooth_scale::discover(&adapter);
+    tokio::pin!(scan);
+    let mut tick = tokio::time::interval(Duration::from_millis(200));
+    loop {
+        if x.with(|m, now| matches!(m.phase(now), Phase::Running { .. })) {
+            return error(
+                StatusCode::CONFLICT,
+                "bluetooth_scan_busy",
+                "wait until the shot ends before scanning",
+            );
+        }
+        tokio::select! {
+            result = &mut scan => return match result {
+                Ok(devices) => Json(json!({ "adapter": adapter, "devices": devices })).into_response(),
+                Err(e) => error(StatusCode::SERVICE_UNAVAILABLE, "bluetooth_scan_failed", &format!("{e:#}")),
+            },
+            _ = tick.tick() => {},
+        }
     }
 }
 

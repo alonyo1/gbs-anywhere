@@ -9,3 +9,5 @@
 !about.toml
 !about.hbs
 !packaging/install-cargo-about.sh
+
+!third-party/

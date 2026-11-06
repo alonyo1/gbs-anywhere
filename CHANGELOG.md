@@ -6,6 +6,49 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- Removed the experimental `timemore_bluetooth` integration and its
+  `--timemore-address`, `--timemore-adapter`, `--timemore-mini-address` and
+  `--timemore-mini-token` flags, with no replacement. Saved entries remain
+  visible as unsupported and can be removed in the app.
+
+### Added
+
+- Experimental BOOKOO Themis Mini → Linux → Linea Mini brew-by-weight bridge,
+  available as a separate integration. Forwards fresh weights and confirms
+  physical tare/timer controls; the Mini uses its own selected dose to stop.
+  Local registration preserves other scale registrations. Requires simultaneous
+  Bluetooth roles. Includes protocol and simulated transport tests; physical
+  compatibility and cutoff accuracy remain unverified.
+
+- Optional Linea Mini Bluetooth paddle timing for the BOOKOO scale.
+  An armed shot tares at a fresh brew-start event, times through brew stop,
+  and reports the settled final weight. Includes local token reading with
+  `--read-mini-token`, Mini discovery in scale settings, replay protection,
+  and manual fallback after a connection gap. Requires shot-counter firmware;
+  physical Mini/scale validation is still needed.
+
+- Bluetooth scale discovery in the setup and edit forms, with explicit device
+  selection, names and addresses. Scans stop when a shot starts.
+- Live scale weight and time from first drops on the brewing screen and scale
+  cards, with stale readings hidden after a connection gap.
+- Test shots from a scale's card, without a grinder request. A test tares only
+  the selected scale and cannot report or abort a grinder-requested shot.
+
+- BOOKOO Themis Mini Bluetooth integration for Linux: report cup weight and
+  time from the first drops, with reconnect handling and manual fallback
+  for interrupted shots. Requires BlueZ and a system D-Bus mount in Docker.
+  Protocol, simulated Bluetooth and shot-handling tests cover the implementation;
+  real-scale validation is still needed. The integration card shows live
+  weight so it can be checked against a known weight.
+
+### Fixed
+
+- Reset Bluetooth reconnect backoff after a successful connection.
+- Manual test results tell the grinder to skip adjustment even if it missed
+  every poll while the test was running.
+
 ## [0.4.0] - 2026-10-30
 
 ### Changed (breaking)

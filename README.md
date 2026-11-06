@@ -312,6 +312,42 @@ still set.
 |---|---|---|
 | La Marzocco cloud | time and weight from a connected La Marzocco's coffee log | [src/integration/la_marzocco](src/integration/la_marzocco/README.md) |
 | Half Decent Scale | time from first drops and weight, from a Half Decent Scale over WiFi | [src/integration/half_decent](src/integration/half_decent/README.md) |
+| BOOKOO Bluetooth scale | time from first drops and weight, directly from a Themis Mini over Linux Bluetooth | [src/integration/bookoo_bluetooth](src/integration/bookoo_bluetooth/README.md) |
+| BOOKOO → Mini brew-by-weight | virtual scale for native Mini weight cutoff, plus GbS timing and yield; experimental | [Bridge setup and target weight](src/integration/bookoo_brew_by_weight/README.md) |
+
+The ordinary BOOKOO Bluetooth integration needs the host's BlueZ service and, in Docker, a
+read-only `/run/dbus` mount. It still needs real-scale validation: compare
+the live reading with a known weight before using GbS. It reports the
+shot; it does not stop the espresso machine.
+
+The separate **BOOKOO → Mini brew-by-weight** bridge forwards weight to the Mini,
+which stops at the dose selected in the La Marzocco app. It also needs simultaneous
+Bluetooth roles. It replaces the ordinary BOOKOO integration; see its setup guide.
+
+In a Bluetooth integration's setup or edit form, **Scan for scales** lists
+device names and addresses for you to choose; entering an address by hand
+also works. Names do not establish compatibility, and results can include
+previously discovered devices. The scan never connects to a device and
+stops if a shot starts.
+
+Connected scale cards show live weight and the current or last measurement's
+time. In the ordinary scale mode, **Test shot** tares the selected scale: pour water into a cup, then
+stop pouring and wait for its measured result. This works without a grinder
+and does not adjust it or add a shot to grinder history. **Abort test** only
+ends that test. A Bluetooth interruption leaves the test for manual entry
+or abort; it never resumes partway through.
+
+During a grinder-requested shot, the brewing screen shows fresh scale weight
+and time from the selected timing source. Its reporting deadline still starts with the
+grinder's request. **Enter this shot manually** keeps manual reporting
+available. Disconnected or stale scale readings are not shown as live.
+
+For a compatible **Linea Mini R**, optional [Mini paddle timing](src/integration/bluetooth_scale/README.md)
+uses the machine's live Bluetooth events: the grinder request arms the shot,
+paddle start tares the scale and starts the app timer, and paddle stop freezes
+the time while the final weight settles. It uses a local Bluetooth token, not
+a La Marzocco account password. Test shots also wait for the paddle in this
+mode. Leave the Mini address empty to keep timing from first drops.
 
 ## Settings in the app
 
@@ -392,6 +428,8 @@ there turns on the control address the image and the package turn off:
 | `--update-check <on\|off>` | on | look for a newer release once a day (see [Update check](#run-it)); also `UPDATE_CHECK`; a choice made in the app wins |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
+| `--bookoo-bbw-*` | off | Experimental native Mini brew-by-weight bridge; see [its README](src/integration/bookoo_brew_by_weight/README.md) |
+| `--bookoo-*` | off | BOOKOO Themis Mini over Linux Bluetooth, see [its README](src/integration/bookoo_bluetooth/README.md) |
 
 `gbs-anywhere --help` lists the rest, such as `--no-app`.
 

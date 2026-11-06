@@ -372,6 +372,9 @@ pub struct Machine {
     phase: Phase,
     /// The brew running (or last run) came from an E65/E80 brew job.
     brew_job: bool,
+    /// Retained through finishing: manual results must never adjust a grinder,
+    /// even if it missed every poll while the manual shot was running.
+    grinder_result: bool,
     /// See [`Machine::grinder_range`].
     range: Option<GrinderRange>,
     last_shot: Option<ShotResult>,
@@ -388,6 +391,7 @@ impl Machine {
             overrides: Map::new(),
             phase: Phase::Ready,
             brew_job: false,
+            grinder_result: false,
             range: None,
             last_shot: None,
             last_grind: None,
@@ -625,7 +629,7 @@ impl Machine {
                 result, aborted, ..
             } => {
                 s.status = MachineStatus::ActiveFinishing;
-                s.extraction_status = if aborted {
+                s.extraction_status = if aborted || !self.grinder_result {
                     EXTRACTION_STATUS_USER_ABORT
                 } else {
                     EXTRACTION_STATUS_FINISHED
@@ -654,6 +658,7 @@ impl Machine {
             requested_by_grinder,
         };
         self.brew_job = false;
+        self.grinder_result = requested_by_grinder;
         let human_action = if requested_by_grinder {
             "Start the shot on the machine now, then report time and weight."
         } else {
@@ -937,6 +942,34 @@ mod tests {
         m.report_shot(t0 + POLL, ShotResult::new(Duration::from_secs(25), 30.0))
             .unwrap();
         assert_eq!(poll_until_ready(&mut m, &mut g, t0 + POLL), None);
+    }
+
+    #[test]
+    fn manual_result_is_skipped_when_the_grinder_missed_the_running_shot() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(MachineConfig::default());
+        let mut g = GrinderModel::default();
+        g.observe(&m.mako(t0));
+        m.start_shot(t0).unwrap();
+        let result = ShotResult::new(Duration::from_secs(25), 36.0);
+        m.report_shot(t0 + POLL, result).unwrap();
+        assert!(matches!(
+            m.phase(t0 + POLL),
+            Phase::Finishing { aborted: false, .. }
+        ));
+        assert_eq!(
+            m.last_shot(),
+            Some(result),
+            "the app still shows the test result"
+        );
+        assert_eq!(poll_until_ready(&mut m, &mut g, t0 + POLL), None);
+
+        let next = t0 + Duration::from_secs(30);
+        g.request_start();
+        m.on_start_request(next, Some(9));
+        g.observe(&m.mako(next));
+        m.report_shot(next + POLL, result).unwrap();
+        assert_eq!(poll_until_ready(&mut m, &mut g, next + POLL), Some(25000));
     }
 
     #[test]

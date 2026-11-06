@@ -36,7 +36,8 @@ file is for agents changing the code.
   `wifi_grinder/tests/`) hold the end-to-end tests.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
-  shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the
+  shared rules (`Link`), `scale_shot.rs` the shared scale detector,
+  `scale_live.rs` the app's readings, `kind.rs` the setup forms and `manager.rs` the
   running integrations, saved through `server/settings.rs`.
 - `web/`: the phone app, one page with no build step. `index.html` holds the
   markup and the small script that sets the theme before the first paint,
@@ -176,7 +177,7 @@ Each integration is a folder `src/integration/<id>/` with `mod.rs`
 (`pub(crate) static KIND: Kind`), `config.rs` (the form's `FIELDS`, a typed
 config, and a clap `Args` with `#[group(id = "<id>")]`), `run.rs`
 (implements `Integration`), `icon.svg` and `README.md`, plus more files as
-it needs them (`la_marzocco/cloud.rs`, `half_decent/shot.rs`). Register it
+it needs them (`la_marzocco/cloud.rs`, `bluetooth_scale/bluez.rs`). Register it
 in `src/integration/mod.rs` in four places: `pub(crate) mod`, `KINDS`, a
 `CliArgs` field and its line in `CliArgs::configured`.
 The module docs there are the full spec; `la_marzocco/` is the worked example.
@@ -185,6 +186,18 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   integration shares: a shot counts only while the grinder waits after a knob
   press (on an E65/E80 GbS: after a Grind-by-Sync grind), and a missing
   weight falls back to the recipe weight.
+  Bluetooth scales can optionally take tare/start/stop from the Mini's live
+  BLE events (`bluetooth_scale/mini*`, `paddle.rs`). Only a fresh explicit
+  start after an armed request can tare; subscription replay and mid-shot
+  timer updates cannot. No partial measurement resumes after reconnect.
+  `--read-mini-token` is an explicit local CLI-only secret output; saved
+  tokens use password fields and never appear in API responses.
+  The separate `bookoo_brew_by_weight` bridge instead forwards the selected
+  Mini's native tare/timer commands, including shots without a grinder request.
+  Only its reporting is gated by GbS/test identity. It cannot run alongside
+  another integration owning the same scale or Mini. No pump/standby commands.
+  Explicit scale tests use `Link::finish_test`, bound to the exact manual
+  brew; they cannot answer a grinder request or increment report counts.
 - Secrets are `Input::Password` fields. Passwords never go back out through
   the API or into logs. The other form values come back for editing
   (`GET /api/integrations/<id>/settings`, where `secrets_set` only names the
